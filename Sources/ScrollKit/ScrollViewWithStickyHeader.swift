@@ -3,7 +3,7 @@
 //  ScrollKit
 //
 //  Created by Daniel Saidi on 2023-02-03.
-//  Copyright © 2023-2024 Daniel Saidi. All rights reserved.
+//  Copyright © 2023-2025 Daniel Saidi. All rights reserved.
 //
 
 import SwiftUI
@@ -16,6 +16,17 @@ import SwiftUI
 /// the header that's below the navigation bar. It also uses
 /// a ``ScrollViewHeader`` to make your header view properly
 /// stretch out when the scroll view is pulled down.
+///
+/// You can apply a `headerHeight` which will be the resting
+/// height of the header, a `headerMinHeight` as the minimum
+/// header height (below the top safe area), and an optional
+/// `contentCornerRadius` which applies a corner radius mask
+/// under which the scroll view content will scroll. You can
+/// also set the `headerStretch` parameter to `false` if you
+/// prefer to disable the header stretch effect. This can be
+/// nice when the view is rendered in a sheet, where pulling
+/// down should dismiss the sheet rather than stretching the
+/// sticky header.
 ///
 /// You can use the `onScroll` init parameter to pass in any
 /// function that should be called whenever the view scrolls.
@@ -40,15 +51,20 @@ public struct ScrollViewWithStickyHeader<Header: View, Content: View>: View {
     ///   - axes: The scroll axes to use, by default `.vertical`.
     ///   - header: The scroll view header builder.
     ///   - headerHeight: The height to apply to the scroll view header.
-    ///   - headerMinHeight: The minimum height to apply to the scroll view header, by default `nil`.
+    ///   - headerMinHeight: The minimum height to apply to the scroll view header, by default the `headerHeight`.
+    ///   - headerStretch: Whether to stretch out the header when pulling down, by default `true`.
+    ///   - contentCornerRadius: The corner radius to apply to the scroll content.
     ///   - showsIndicators: Whether or not to show scroll indicators, by default `true`.
+    ///   - scrollManager: A class that manages programmatic scrolling to header or content.
     ///   - onScroll: An action that will be called whenever the scroll offset changes, by default `nil`.
     ///   - content: The scroll view content builder.
     public init(
         _ axes: Axis.Set = .vertical,
         @ViewBuilder header: @escaping () -> Header,
-        headerHeight: CGFloat,
-        headerMinHeight: CGFloat? = nil,
+        headerHeight: Double,
+        headerMinHeight: Double? = nil,
+        headerStretch: Bool = true,
+        contentCornerRadius: CGFloat = 0,
         showsIndicators: Bool = true,
         scrollManager: ScrollManager? = nil,
         onScroll: ScrollAction? = nil,
@@ -58,7 +74,9 @@ public struct ScrollViewWithStickyHeader<Header: View, Content: View>: View {
         self.showsIndicators = showsIndicators
         self.header = header
         self.headerHeight = headerHeight
-        self.headerMinHeight = headerMinHeight
+        self.headerMinHeight = headerMinHeight ?? headerHeight
+        self.headerStretch = headerStretch
+        self.contentCornerRadius = contentCornerRadius
         self.scrollManager = scrollManager
         self.onScroll = onScroll
         self.content = content
@@ -67,29 +85,33 @@ public struct ScrollViewWithStickyHeader<Header: View, Content: View>: View {
     private let axes: Axis.Set
     private let showsIndicators: Bool
     private let header: () -> Header
-    private let headerHeight: CGFloat
-    private let headerMinHeight: CGFloat?
+    private let headerHeight: Double
+    private let headerMinHeight: Double
+    private let headerStretch: Bool
+    private let contentCornerRadius: CGFloat
+    private let scrollManager: ScrollManager?
     private let onScroll: ScrollAction?
     private let content: () -> Content
     
-    public typealias ScrollAction = (_ offset: CGPoint, _ headerVisibleRatio: CGFloat) -> Void
-
-    private var scrollManager: ScrollManager?
+    public typealias ScrollAction = (_ offset: CGPoint, _ visibleHeaderRatio: CGFloat) -> Void
     
-    @State
-    private var navigationBarHeight: CGFloat = 0
-
     @State
     private var scrollOffset: CGPoint = .zero
 
-    private var headerVisibleRatio: CGFloat {
-        (headerHeight + scrollOffset.y) / headerHeight
+    private var visibleHeaderRatio: CGFloat {
+        let value = (headerHeight + scrollOffset.y) / headerHeight
+        if headerStretch { return value }
+        print(value)
+        return min(1, value)
     }
 
     public var body: some View {
-        ZStack(alignment: .top) {
-            scrollView
-            navbarOverlay
+        GeometryReader { geo in
+            ZStack(alignment: .top) {
+                scrollView(in: geo)
+                navbarOverlay(in: geo)
+            }
+            .edgesIgnoringSafeArea(.all)
         }
         .prefersNavigationBarHidden()
         #if os(iOS)
@@ -101,106 +123,92 @@ public struct ScrollViewWithStickyHeader<Header: View, Content: View>: View {
 @MainActor
 private extension ScrollViewWithStickyHeader {
     
-    var isStickyHeaderVisible: Bool {
-        guard let headerMinHeight else { return headerVisibleRatio <= 0 }
-        return scrollOffset.y < -headerMinHeight
+    func headerMinHeight(
+        in geo: GeometryProxy
+    ) -> Double {
+        let safeMinHeight = headerMinHeight + geo.safeAreaInsets.top
+        return min(safeMinHeight, headerHeight)
+    }
+    
+    func isStickyHeaderVisible(
+        in geo: GeometryProxy
+    ) -> Bool {
+        let minHeight = headerMinHeight(in: geo)
+        return scrollOffset.y < -minHeight
     }
 
-    @ViewBuilder
-    var navbarOverlay: some View {
-        if isStickyHeaderVisible {
-            Color.clear
-                .frame(height: navigationBarHeight)
-                .overlay(scrollHeader, alignment: .bottom)
-                .ignoresSafeArea(edges: .top)
-                .frame(height: headerMinHeight)
+    func navbarOverlay(
+        in geo: GeometryProxy
+    ) -> some View {
+        let minHeight = headerMinHeight(in: geo)
+        let ratioHeight = headerHeight * visibleHeaderRatio
+        return Color.clear.overlay(alignment: .bottom) {
+            scrollHeader
         }
+        .frame(height: max(minHeight, ratioHeight))
+        .ignoresSafeArea(edges: .top)
     }
 
-    var scrollView: some View {
-        GeometryReader { proxy in
-            ScrollViewReader { scrollProxy in
-                ScrollViewWithOffsetTracking(
-                    axes,
-                    showsIndicators: showsIndicators,
-                    onScroll: handleScrollOffset
-                ) {
-                    VStack(spacing: 0) {
-                        scrollHeader
-                            .id(ScrollManager.ScrollTargets.header)
-                        content()
-                            .frame(maxHeight: .infinity)
-                            .id(ScrollManager.ScrollTargets.content)
-                    }
-                }
-                .onAppear {
-                    scrollManager?.setProxy(scrollProxy)
+    func scrollView(
+        in geo: GeometryProxy
+    ) -> some View {
+        ScrollViewReader { scrollProxy in
+            ScrollViewWithOffsetTracking(
+                axes,
+                showsIndicators: showsIndicators,
+                onScroll: handleScrollOffset
+            ) {
+                VStack(spacing: 0) {
+                    scrollHeader
+                        .opacity(0)
+                        .id(ScrollManager.ScrollTargets.header)
+                    content()
+                        .frame(maxHeight: .infinity)
+                        .id(ScrollManager.ScrollTargets.content)
                 }
             }
             .onAppear {
-                DispatchQueue.main.async {
-                    navigationBarHeight = proxy.safeAreaInsets.top
-                }
+                scrollManager?.setProxy(scrollProxy)
             }
         }
     }
-
+    
+    @ViewBuilder
     var scrollHeader: some View {
+        if #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, *) {
+            scrollHeaderView
+                .scrollViewHeaderWithRoundedContentMask(contentCornerRadius)
+        } else {
+            scrollHeaderView
+        }
+    }
+    
+    @ViewBuilder
+    var scrollHeaderView: some View {
         ScrollViewHeader(content: header)
-            .frame(height: headerHeight)
+            .frame(minHeight: headerHeight)
+            .edgesIgnoringSafeArea(.all)
     }
 
     func handleScrollOffset(_ offset: CGPoint) {
         self.scrollOffset = offset
-        self.onScroll?(offset, headerVisibleRatio)
+        self.onScroll?(offset, visibleHeaderRatio)
     }
 }
 
-private struct Preview: View {
-    
-    @State
-    var headerVisibleRatio = 0.0
-    
-    @State
-    var scrollOffset = CGPoint.zero
-    
-    func header() -> some View {
-        #if canImport(UIKit)
-        TabView {
-            Color.red.tag(0)
-            Color.green.tag(1)
-            Color.blue.tag(2)
-        }
-        .tabViewStyle(.page)
-        .overlay {
-            VStack {
-                Text("Offset: \(scrollOffset.y)")
-                Text("Ratio: \(headerVisibleRatio)")
-            }
-        }
-        #else
-        VStack {
-            Color.blue
-            Color.red
-        }
-        #endif
-    }
-    
-    var body: some View {
-        ScrollViewWithStickyHeader(
-            .vertical,
-            header: header,
-            headerHeight: 250,
-            headerMinHeight: 150,
-            showsIndicators: false,
-            onScroll: { offset, headerVisibleRatio in
-                self.scrollOffset = offset
-                self.headerVisibleRatio = headerVisibleRatio
-            }
-        ) {
-            LazyVStack {
-                ForEach(1...100, id: \.self) {
-                    Text("\($0)")
+#Preview("Demo") {
+    ScrollViewWithStickyHeader(
+        header: { Color.red },
+        headerHeight: 200,
+        headerMinHeight: 200
+    ) {
+        LazyVStack(spacing: 0) {
+            ForEach(1...100, id: \.self) { item in
+                VStack(spacing: 0) {
+                    Text("Item \(item)")
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Divider()
                 }
             }
         }
@@ -215,8 +223,6 @@ private struct Preview: View {
         #endif
         Preview()
     }
-    .colorScheme(.dark)
-    .accentColor(.white)
     #if os(iOS)
     .navigationViewStyle(.stack)
     #endif
@@ -241,16 +247,75 @@ private struct Preview: View {
     return SheetPreview()
 }
 
-private extension View {
+private struct Preview: View {
     
-    func isInSheet(in geo: GeometryProxy) -> Bool {
-        #if os(iOS)
-        guard UIScreen.main.traitCollection.userInterfaceIdiom == .phone else { return false }
-        return geo.safeAreaInsets.top == 0
+    @State var visibleHeaderRatio = 0.0
+    @State var scrollOffset = CGPoint.zero
+     
+    let contentCornerRadius = 20.0
+    
+    func header() -> some View {
+        #if canImport(UIKit)
+        TabView {
+            Group {
+                Group {
+                    headerPageView(.red).tag(0)
+                    headerPageView(.green).tag(1)
+                    headerPageView(.blue).tag(2)
+                }
+                .edgesIgnoringSafeArea(.all)
+            }
+        }
+        .tabViewStyle(.page)
         #else
-        return false
+        VStack {
+            Color.blue
+            Color.red
+        }
         #endif
     }
+    
+    func headerPageView(
+        _ color: Color
+    ) -> some View {
+        LinearGradient(
+            colors: [color, .black],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+    
+    var body: some View {
+        ScrollViewWithStickyHeader(
+            .vertical,
+            header: header,
+            headerHeight: 250,
+            headerMinHeight: 100,
+            headerStretch: false,
+            contentCornerRadius: 0, //contentCornerRadius,
+            showsIndicators: false,
+            onScroll: { offset, visibleHeaderRatio in
+                self.scrollOffset = offset
+                self.visibleHeaderRatio = visibleHeaderRatio
+            }
+        ) {
+            LazyVStack {
+                ForEach(1...100, id: \.self) {
+                    Text("\($0)")
+                }
+            }
+        }
+        .overlay {
+            VStack {
+                Text("Offset: \(scrollOffset.y)")
+                Text("Ratio: \(visibleHeaderRatio)")
+            }
+            .background(Color.yellow)
+        }
+    }
+}
+
+private extension View {
 
     @ViewBuilder
     func prefersNavigationBarHidden() -> some View {

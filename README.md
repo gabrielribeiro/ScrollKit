@@ -56,27 +56,30 @@ struct MyView: View {
     
     @State
     private var visibleRatio = CGFloat.zero
-    
-    func handleOffset(_ scrollOffset: CGPoint, visibleHeaderRatio: CGFloat) {
-        self.offset = scrollOffset
-        self.visibleRatio = visibleHeaderRatio
-    }
-    
-    func header() -> some View {
-        ZStack(alignment: .bottomLeading) {
-            Color.blue
-            Color.yellow.opacity(visibleRatio)  // Fades in
-        }
-    }
 
     var body: some View {
         ScrollViewWithStickyHeader(
-            header: header,
-            headerHeight: 250,
-            headerMinHeight: 150,
-            onScroll: handleOffset
+            header: stickyHeader,   // A header view
+            headerHeight: 250,      // The resting header height
+            headerMinHeight: 150,   // The minimum header height
+            headerStretch: false,   // Disables the stretch effect
+            contentCornerRadius: 20 // An optional corner radius mask
+            onScroll: handleScroll  // An optional scroll handler action
         ) {
             // Add your scroll content here, e.g. a `LazyVStack`
+        }
+    }
+
+    func handleScroll(_ offset: CGPoint, visibleHeaderRatio: CGFloat) {
+        self.scrollOffset = offset
+        self.visibleRatio = visibleHeaderRatio
+    }
+
+    func stickyHeader() -> some View {
+        ZStack {
+            Color.red
+            ScrollViewHeaderGradient()  // By default a dark gradient
+            Text("Scroll offset: \(offset.y)")
         }
     }
 }

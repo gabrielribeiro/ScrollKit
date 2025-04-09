@@ -3,7 +3,7 @@
 //  ScrollKit
 //
 //  Created by Daniel Saidi on 2023-02-04.
-//  Copyright © 2023-2024 Daniel Saidi. All rights reserved.
+//  Copyright © 2023-2025 Daniel Saidi. All rights reserved.
 //
 
 import SwiftUI
@@ -75,9 +75,9 @@ private extension ContentView {
         }
     }
 
-    func spotifyLink(_ info: Spotify.PreviewInfo) -> some View {
+    func spotifyLink(_ info: Examples.Spotify.Album) -> some View {
         link("record.circle.fill", "Spotify - \(info.bandName)") {
-            Spotify.PreviewScreen(info: info)
+            Examples.Spotify.AlbumScreen(album: info)
         }
     }
 
@@ -88,8 +88,6 @@ private extension ContentView {
     }
 }
 
-struct ContentView_Previews: PreviewProvider {
-    static var previews: some View {
-        ContentView()
-    }
+#Preview {
+    ContentView()
 }
